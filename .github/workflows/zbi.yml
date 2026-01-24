@@ -1,4 +1,4 @@
-name: RDP
+name: debian
 
 on:
   workflow_dispatch:
