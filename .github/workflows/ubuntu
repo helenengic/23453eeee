@@ -1,0 +1,123 @@
+name: ubuntu-22.04-RDP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  linux-rdp:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 3600
+
+    steps:
+      - name: Update System and Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget curl gnupg
+
+      - name: Install XRDP and Desktop Environment
+        run: |
+          # Install XRDP (RDP server for Linux)
+          sudo apt-get install -y xrdp
+          
+          # Install lightweight desktop environment (XFCE)
+          sudo apt-get install -y xfce4 xfce4-goodies
+          
+          # Configure XRDP to use XFCE
+          echo "xfce4-session" | sudo tee /etc/skel/.xsession
+          
+          # Start XRDP service
+          sudo systemctl enable xrdp
+          sudo systemctl start xrdp
+          
+          # Allow RDP through firewall
+          sudo ufw allow 3389/tcp || true
+
+      - name: Create RDP User with Static Password
+        run: |
+          # Create user with home directory
+          sudo useradd -m -s /bin/bash RDP
+          
+          # Set password
+          echo "RDP:PASS444@@" | sudo chpasswd
+          
+          # Add user to sudo group
+          sudo usermod -aG sudo RDP
+          
+          # Create .xsession for the user
+          echo "xfce4-session" | sudo tee /home/RDP/.xsession
+          sudo chown RDP:RDP /home/RDP/.xsession
+          
+          echo "User RDP created successfully"
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get install -y ffmpeg
+          
+          # Verify installation
+          ffmpeg -version
+
+      - name: Install Tailscale
+        run: |
+          # Add Tailscale's package signing key and repository
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
+          
+          # Install Tailscale
+          sudo apt-get update
+          sudo apt-get install -y tailscale
+          
+          # Start Tailscale service
+          sudo systemctl enable tailscaled
+          sudo systemctl start tailscaled
+
+      - name: Establish Tailscale Connection
+        run: |
+          # Bring up Tailscale with the provided auth key
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-linux-${{ github.run_id }}
+          
+          # Wait for Tailscale to assign an IP
+          sleep 10
+          
+          TAILSCALE_IP=$(tailscale ip -4)
+          
+          if [ -z "$TAILSCALE_IP" ]; then
+              echo "Tailscale IP not assigned. Exiting."
+              exit 1
+          fi
+          
+          echo "TAILSCALE_IP=$TAILSCALE_IP" >> $GITHUB_ENV
+          echo "Tailscale IP: $TAILSCALE_IP"
+
+      - name: Verify RDP Accessibility
+        run: |
+          echo "Tailscale IP: $TAILSCALE_IP"
+          
+          # Check if XRDP is listening on port 3389
+          if sudo netstat -tuln | grep -q ':3389'; then
+              echo "XRDP is listening on port 3389"
+          else
+              echo "ERROR: XRDP is not listening on port 3389"
+              exit 1
+          fi
+          
+          # Check XRDP service status
+          sudo systemctl status xrdp --no-pager
+
+      - name: Maintain Connection
+        run: |
+          echo ""
+          echo "=== RDP ACCESS ==="
+          echo "Address: $TAILSCALE_IP"
+          echo "Username: RDP"
+          echo "Password: PASS444@@"
+          echo "=================="
+          echo ""
+          echo "Use an RDP client (Remote Desktop) to connect"
+          echo "Desktop Environment: XFCE"
+          echo ""
+          
+          # Keep runner active indefinitely (or until manually cancelled)
+          while true; do
+              echo "[$(date)] RDP Active - Use workflow cancellation to terminate"
+              sleep 300
+          done
